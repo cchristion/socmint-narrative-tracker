@@ -6,4 +6,5 @@
 - narratives
 - origin
 - coordination
+  - Pairwise Similarity Matrix
 - exporter / app
