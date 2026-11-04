@@ -195,8 +195,9 @@ def collect_posts(
 
     start_dt = pd.to_datetime(start_date, utc=True)
     end_dt = pd.to_datetime(end_date, utc=True) + pd.Timedelta(days=1)
+
     mask = (df["timestamp_dt"] >= start_dt) & (df["timestamp_dt"] <= end_dt)
-    if mask.sum() > 0:
-        df = df[mask].copy()
+
+    df = df[mask].copy()
 
     return df.sort_values("timestamp_dt").reset_index(drop=True)
