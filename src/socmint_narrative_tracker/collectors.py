@@ -1,11 +1,16 @@
 import hashlib
+import json
 import re
 from datetime import datetime, timedelta
 
+import pandas as pd
 import requests
 import scrapetube
 from bs4 import BeautifulSoup
 from ddgs import DDGS
+
+CACHE_DIR = "data/cache"
+SAMPLE_PATH = "data/sample_acme_bank.json"
 
 
 def _md5(text: str) -> str:
@@ -119,3 +124,36 @@ def scrape_telegram_and_x_live(topic: str, limit: int = 15) -> list[dict]:
     except Exception as e:
         print(f"[WARN] Live OSINT error: {e}")
     return results
+
+
+def collect_posts(
+    topic: str, start_date: str, end_date: str, platforms: list[str], mode: str = "live"
+) -> pd.DataFrame:
+    posts = []
+
+    if mode == "sample":
+        with open(SAMPLE_PATH, "r", encoding="utf-8") as f:
+            posts = json.load(f)
+    else:
+        if "YouTube" in platforms:
+            posts.extend(scrape_youtube_live(topic))
+        if "Telegram" in platforms or "X" in platforms:
+            posts.extend(scrape_telegram_and_x_live(topic))
+
+    df = pd.DataFrame(posts)
+    if df.empty:
+        return df
+
+    df = df[df["platform"].isin(platforms)].copy()
+    df["timestamp_dt"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    df["author_created_dt"] = pd.to_datetime(
+        df["author_created_at"], utc=True, errors="coerce"
+    )
+
+    start_dt = pd.to_datetime(start_date, utc=True)
+    end_dt = pd.to_datetime(end_date, utc=True) + pd.Timedelta(days=1)
+    mask = (df["timestamp_dt"] >= start_dt) & (df["timestamp_dt"] <= end_dt)
+    if mask.sum() > 0:
+        df = df[mask].copy()
+
+    return df.sort_values("timestamp_dt").reset_index(drop=True)
