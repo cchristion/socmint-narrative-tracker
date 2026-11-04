@@ -48,6 +48,7 @@ Thumbs.db
 
 # Exports
 export
+output
 
 # Jupyter
 .ipynb_checkpoints/
