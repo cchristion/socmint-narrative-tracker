@@ -9,13 +9,28 @@ import scrapetube
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 
-CACHE_DIR = "data/cache"
 SAMPLE_PATH = "data/sample_acme_bank.json"
 
 
 def _md5(text: str) -> str:
-    # Produces a 12-char hash to fingerprint profile avatars
     return hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _parse_count(raw_text: str) -> int | None:
+    """Convert strings like '14.2K', '1.5M', or '1,204 views' into an integer."""
+    if not raw_text:
+        return None
+    clean = raw_text.strip().upper().replace(",", "")
+    m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([KM]?)", clean)
+    if not m:
+        return None
+    val = float(m.group(1))
+    suffix = m.group(2)
+    if suffix == "K":
+        val *= 1_000
+    elif suffix == "M":
+        val *= 1_000_000
+    return int(val)
 
 
 def scrape_youtube_live(topic: str, limit: int = 15) -> list[dict]:
@@ -31,8 +46,9 @@ def scrape_youtube_live(topic: str, limit: int = 15) -> list[dict]:
                 .get("runs", [{}])[0]
                 .get("text", f"yt_channel_{idx}")
             )
-            view_text = v.get("viewCountText", {}).get("simpleText", "0")
-            views = int(re.sub(r"[^0-9]", "", view_text) or 150)
+            view_text = v.get("viewCountText", {}).get("simpleText", "")
+            thumbs = v.get("thumbnail", {}).get("thumbnails", [{}])
+            thumb_url = thumbs[-1].get("url", "") if thumbs else ""
 
             results.append(
                 {
@@ -43,8 +59,16 @@ def scrape_youtube_live(topic: str, limit: int = 15) -> list[dict]:
                     "avatar_hash": _md5(channel),
                     "timestamp": (now - timedelta(hours=idx * 2 + 1)).isoformat(),
                     "text": title or f"Video coverage regarding {topic}",
-                    "media_urls": [f"https://www.youtube.com/watch?v={vid_id}"],
+                    "media_urls": [
+                        u
+                        for u in (
+                            thumb_url,
+                            f"https://www.youtube.com/watch?v={vid_id}",
+                        )
+                        if u
+                    ],
                     "media_type": "video",
+                    "engagement": _parse_count(view_text),
                     "amplified_handle": "",
                     "link": f"https://www.youtube.com/watch?v={vid_id}",
                 }
@@ -61,6 +85,7 @@ def scrape_telegram_and_x_live(topic: str, limit: int = 15) -> list[dict]:
 
     try:
         with DDGS() as ddgs:
+            # 1. Telegram public posts
             for idx, hit in enumerate(
                 ddgs.text(f'site:t.me "{topic}"', max_results=limit)
             ):
@@ -69,14 +94,19 @@ def scrape_telegram_and_x_live(topic: str, limit: int = 15) -> list[dict]:
                 m = re.search(r"t\.me/(?:s/)?([a-zA-Z0-9_]+)", href)
                 handle = f"@{m.group(1)}" if m else f"@tg_channel_{idx}"
                 ts_iso = (now - timedelta(hours=idx * 2 + 1)).isoformat()
+                engagement = None
 
                 if "t.me/s/" in href:
                     try:
                         resp = requests.get(href, headers=headers, timeout=5)
-                        soup = BeautifulSoup(resp.text, "html.parser")
-                        t_tag = soup.select_one(".tgme_widget_message_date time")
-                        if t_tag and t_tag.get("datetime"):
-                            ts_iso = t_tag["datetime"][:19]
+                        if resp.status_code == 200:
+                            soup = BeautifulSoup(resp.text, "html.parser")
+                            t_tag = soup.select_one(".tgme_widget_message_date time")
+                            if t_tag and t_tag.get("datetime"):
+                                ts_iso = t_tag["datetime"][:19]
+                            v_tag = soup.select_one(".tgme_widget_message_views")
+                            if v_tag:
+                                engagement = _parse_count(v_tag.get_text(strip=True))
                     except Exception:
                         pass
 
@@ -91,11 +121,13 @@ def scrape_telegram_and_x_live(topic: str, limit: int = 15) -> list[dict]:
                         "text": body[:400],
                         "media_urls": [],
                         "media_type": "text",
+                        "engagement": engagement,
                         "amplified_handle": "",
                         "link": href,
                     }
                 )
 
+            # 2. X public posts
             for idx, hit in enumerate(
                 ddgs.text(
                     f'(site:x.com OR site:twitter.com) "{topic}"', max_results=limit
@@ -117,6 +149,7 @@ def scrape_telegram_and_x_live(topic: str, limit: int = 15) -> list[dict]:
                         "text": body[:400],
                         "media_urls": [],
                         "media_type": "text",
+                        "engagement": None,
                         "amplified_handle": "",
                         "link": href,
                     }
@@ -127,14 +160,17 @@ def scrape_telegram_and_x_live(topic: str, limit: int = 15) -> list[dict]:
 
 
 def collect_posts(
-    topic: str, start_date: str, end_date: str, platforms: list[str], mode: str = "live"
+    topic: str,
+    start_date: str,
+    end_date: str,
+    platforms: list[str],
+    mode: str = "sample",
 ) -> pd.DataFrame:
-    posts = []
-
     if mode == "sample":
         with open(SAMPLE_PATH, "r", encoding="utf-8") as f:
             posts = json.load(f)
     else:
+        posts = []
         if "YouTube" in platforms:
             posts.extend(scrape_youtube_live(topic))
         if "Telegram" in platforms or "X" in platforms:
@@ -143,6 +179,13 @@ def collect_posts(
     df = pd.DataFrame(posts)
     if df.empty:
         return df
+
+    # Normalize legacy sample files if they still have engagement_total
+    if "engagement" not in df.columns:
+        df["engagement"] = df.get("engagement_total", None)
+    df = df.drop(
+        columns=["likes", "shares", "views", "engagement_total"], errors="ignore"
+    )
 
     df = df[df["platform"].isin(platforms)].copy()
     df["timestamp_dt"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
