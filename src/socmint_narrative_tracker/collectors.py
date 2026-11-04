@@ -9,7 +9,7 @@ import scrapetube
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 
-SAMPLE_PATH = "data/sample_acme_bank.json"
+SAMPLE_PATH = "data/synthetic_posts.json"
 
 
 def _md5(text: str) -> str:
