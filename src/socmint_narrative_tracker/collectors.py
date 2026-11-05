@@ -1,14 +1,15 @@
 import hashlib
 import json
+import os
 import re
 from datetime import datetime, timedelta
-
 import pandas as pd
 import requests
-import scrapetube
 from bs4 import BeautifulSoup
+import scrapetube
 from ddgs import DDGS
 
+CACHE_DIR = "data/cache"
 SAMPLE_PATH = "data/synthetic_posts.json"
 
 
@@ -16,8 +17,13 @@ def _md5(text: str) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
 
 
+def _get_cache_path(topic: str) -> str:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    slug = re.sub(r"[^a-z0-9]+", "_", topic.lower()).strip("_") or "query"
+    return os.path.join(CACHE_DIR, f"{slug}.json")
+
+
 def _parse_count(raw_text: str) -> int | None:
-    """Convert strings like '14.2K', '1.5M', or '1,204 views' into an integer."""
     if not raw_text:
         return None
     clean = raw_text.strip().upper().replace(",", "")
@@ -78,85 +84,104 @@ def scrape_youtube_live(topic: str, limit: int = 15) -> list[dict]:
     return results
 
 
-def scrape_telegram_and_x_live(topic: str, limit: int = 15) -> list[dict]:
+def scrape_telegram_and_x_live(
+    topic: str, limit: int = 15, platforms: list[str] | None = None
+) -> list[dict]:
     results = []
     now = datetime.utcnow()
     headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"}
+    target_platforms = platforms or ["Telegram", "X"]
 
     try:
         with DDGS() as ddgs:
-            # 1. Telegram public posts
-            for idx, hit in enumerate(
-                ddgs.text(f'site:t.me "{topic}"', max_results=limit)
-            ):
-                href = hit.get("href", "")
-                body = hit.get("body", "") or hit.get("title", "")
-                m = re.search(r"t\.me/(?:s/)?([a-zA-Z0-9_]+)", href)
-                handle = f"@{m.group(1)}" if m else f"@tg_channel_{idx}"
-                ts_iso = (now - timedelta(hours=idx * 2 + 1)).isoformat()
-                engagement = None
+            if "Telegram" in target_platforms:
+                for idx, hit in enumerate(
+                    ddgs.text(f'site:t.me "{topic}"', max_results=limit)
+                ):
+                    href = hit.get("href", "")
+                    body = hit.get("body", "") or hit.get("title", "")
+                    m = re.search(r"t\.me/(?:s/)?([a-zA-Z0-9_]+)", href)
+                    handle = f"@{m.group(1)}" if m else f"@tg_channel_{idx}"
+                    ts_iso = (now - timedelta(hours=idx * 2 + 1)).isoformat()
+                    engagement = None
 
-                if "t.me/s/" in href:
-                    try:
-                        resp = requests.get(href, headers=headers, timeout=5)
-                        if resp.status_code == 200:
-                            soup = BeautifulSoup(resp.text, "html.parser")
-                            t_tag = soup.select_one(".tgme_widget_message_date time")
-                            if t_tag and t_tag.get("datetime"):
-                                ts_iso = t_tag["datetime"][:19]
-                            v_tag = soup.select_one(".tgme_widget_message_views")
-                            if v_tag:
-                                engagement = _parse_count(v_tag.get_text(strip=True))
-                    except Exception:
-                        pass
+                    if "t.me/s/" in href:
+                        try:
+                            resp = requests.get(href, headers=headers, timeout=5)
+                            if resp.status_code == 200:
+                                soup = BeautifulSoup(resp.text, "html.parser")
+                                t_tags = soup.select(".tgme_widget_message_date time")
+                                if t_tags and t_tags[-1].get("datetime"):
+                                    ts_iso = t_tags[-1]["datetime"][:19]
+                                v_tags = soup.select(".tgme_widget_message_views")
+                                if v_tags:
+                                    engagement = _parse_count(
+                                        v_tags[-1].get_text(strip=True)
+                                    )
+                        except Exception:
+                            pass
 
-                results.append(
-                    {
-                        "post_id": f"tg_live_{idx}",
-                        "platform": "Telegram",
-                        "author_handle": handle,
-                        "author_created_at": None,
-                        "avatar_hash": _md5(handle),
-                        "timestamp": ts_iso,
-                        "text": body[:400],
-                        "media_urls": [],
-                        "media_type": "text",
-                        "engagement": engagement,
-                        "amplified_handle": "",
-                        "link": href,
-                    }
-                )
+                    results.append(
+                        {
+                            "post_id": f"tg_{_md5(href or body)}",
+                            "platform": "Telegram",
+                            "author_handle": handle,
+                            "author_created_at": None,
+                            "avatar_hash": _md5(handle),
+                            "timestamp": ts_iso,
+                            "text": body[:400],
+                            "media_urls": [],
+                            "media_type": "text",
+                            "engagement": engagement,
+                            "amplified_handle": "",
+                            "link": href,
+                        }
+                    )
 
-            # 2. X public posts
-            for idx, hit in enumerate(
-                ddgs.text(
-                    f'(site:x.com OR site:twitter.com) "{topic}"', max_results=limit
-                )
-            ):
-                href = hit.get("href", "")
-                body = hit.get("body", "") or hit.get("title", "")
-                m = re.search(r"(?:x\.com|twitter\.com)/([a-zA-Z0-9_]+)", href)
-                handle = f"@{m.group(1)}" if m else f"@x_user_{idx}"
+            if "X" in target_platforms:
+                for idx, hit in enumerate(
+                    ddgs.text(
+                        f'(site:x.com OR site:twitter.com) "{topic}"', max_results=limit
+                    )
+                ):
+                    href = hit.get("href", "")
+                    body = hit.get("body", "") or hit.get("title", "")
+                    m = re.search(r"(?:x\.com|twitter\.com)/([a-zA-Z0-9_]+)", href)
+                    handle = f"@{m.group(1)}" if m else f"@x_user_{idx}"
 
-                results.append(
-                    {
-                        "post_id": f"x_live_{idx}",
-                        "platform": "X",
-                        "author_handle": handle,
-                        "author_created_at": None,
-                        "avatar_hash": _md5(handle),
-                        "timestamp": (now - timedelta(hours=idx * 2 + 1)).isoformat(),
-                        "text": body[:400],
-                        "media_urls": [],
-                        "media_type": "text",
-                        "engagement": None,
-                        "amplified_handle": "",
-                        "link": href,
-                    }
-                )
+                    results.append(
+                        {
+                            "post_id": f"x_{_md5(href or body)}",
+                            "platform": "X",
+                            "author_handle": handle,
+                            "author_created_at": None,
+                            "avatar_hash": _md5(handle),
+                            "timestamp": (
+                                now - timedelta(hours=idx * 2 + 1)
+                            ).isoformat(),
+                            "text": body[:400],
+                            "media_urls": [],
+                            "media_type": "text",
+                            "engagement": None,
+                            "amplified_handle": "",
+                            "link": href,
+                        }
+                    )
     except Exception as e:
         print(f"[WARN] Live OSINT error: {e}")
     return results
+
+
+def _deduplicate_posts(posts: list[dict]) -> list[dict]:
+    deduped = {}
+    for p in posts:
+        key = (
+            p.get("link")
+            or p.get("post_id")
+            or f"{p.get('platform')}_{p.get('author_handle')}_{_md5(p.get('text', ''))}"
+        )
+        deduped[key] = p
+    return list(deduped.values())
 
 
 def collect_posts(
@@ -165,22 +190,42 @@ def collect_posts(
     end_date: str,
     platforms: list[str],
     mode: str = "sample",
+    force_refresh: bool = False,
 ) -> pd.DataFrame:
     if mode == "sample":
         with open(SAMPLE_PATH, "r", encoding="utf-8") as f:
             posts = json.load(f)
     else:
-        posts = []
+        cache_path = _get_cache_path(topic)
+        cached_posts = []
+
+        # 1. Load existing cached posts
+        if os.path.exists(cache_path) and not force_refresh:
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    cached_posts = json.load(f)
+            except Exception as e:
+                print(f"[WARN] Cache read error ({cache_path}): {e}")
+
+        # 2. Scrape current live posts
+        live_posts = []
         if "YouTube" in platforms:
-            posts.extend(scrape_youtube_live(topic))
-        if "Telegram" in platforms or "X" in platforms:
-            posts.extend(scrape_telegram_and_x_live(topic))
+            live_posts.extend(scrape_youtube_live(topic))
+        tg_or_x = [p for p in platforms if p in ("Telegram", "X")]
+        if tg_or_x:
+            live_posts.extend(scrape_telegram_and_x_live(topic, platforms=tg_or_x))
+
+        # 3. Merge cache + freshly scraped posts and deduplicate
+        posts = _deduplicate_posts(cached_posts + live_posts)
+
+        if posts:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(posts, f, indent=2)
 
     df = pd.DataFrame(posts)
     if df.empty:
         return df
 
-    # Normalize legacy sample files if they still have engagement_total
     if "engagement" not in df.columns:
         df["engagement"] = df.get("engagement_total", None)
     df = df.drop(
@@ -195,9 +240,8 @@ def collect_posts(
 
     start_dt = pd.to_datetime(start_date, utc=True)
     end_dt = pd.to_datetime(end_date, utc=True) + pd.Timedelta(days=1)
-
     mask = (df["timestamp_dt"] >= start_dt) & (df["timestamp_dt"] <= end_dt)
-
-    df = df[mask].copy()
+    if mask.sum() > 0:
+        df = df[mask].copy()
 
     return df.sort_values("timestamp_dt").reset_index(drop=True)

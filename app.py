@@ -33,13 +33,16 @@ with st.sidebar:
         options=["sample", "live"],
         format_func=lambda x: {
             "sample": "Synthetic Benchmark (data/synthetic_posts.json)",
-            "live": "Live OSINT Scrapers (Telegram, X, YouTube)",
+            "live": "Live OSINT Scrapers + Cache (Telegram, X, YouTube)",
         }[x],
     )
     sim_threshold = st.slider(
         "Coordination Text Similarity Threshold", 0.70, 0.98, 0.85, 0.02
     )
     dist_threshold = st.slider("Narrative Clustering Distance", 0.15, 0.60, 0.25, 0.05)
+
+    force_refresh = st.checkbox("🔄 Force Live Refresh (Ignore Cache)", value=False)
+
     run_btn = st.button(
         "🚀 Run Intelligence Pipeline", type="primary", use_container_width=True
     )
@@ -48,7 +51,14 @@ if run_btn or "df" not in st.session_state:
     with st.spinner(
         f"Collecting & analyzing multi-platform telemetry for '{topic}'..."
     ):
-        df = collect_posts(topic, str(start_date), str(end_date), platforms, mode=mode)
+        df = collect_posts(
+            topic,
+            str(start_date),
+            str(end_date),
+            platforms,
+            mode=mode,
+            force_refresh=force_refresh,
+        )
         if not df.empty:
             df, embeddings, narratives = cluster_narratives(
                 df, distance_threshold=dist_threshold, topic=topic
@@ -68,6 +78,7 @@ if run_btn or "df" not in st.session_state:
                 }
             )
         else:
+            st.session_state.pop("df", None)
             st.warning("No posts found for the given criteria.")
 
 if "df" in st.session_state and not st.session_state["df"].empty:
@@ -176,6 +187,7 @@ if "df" in st.session_state and not st.session_state["df"].empty:
                 "narrative_label",
                 "text",
                 "media_type",
+                "engagement",
                 "link",
             ]
         ],
