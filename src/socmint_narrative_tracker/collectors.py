@@ -3,10 +3,11 @@ import json
 import os
 import re
 from datetime import datetime, timedelta
+
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
 import scrapetube
+from bs4 import BeautifulSoup
 from ddgs import DDGS
 
 CACHE_DIR = "data/cache"

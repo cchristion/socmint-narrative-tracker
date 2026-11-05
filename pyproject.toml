@@ -28,6 +28,3 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.2.0",
 ]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101"]
