@@ -67,10 +67,6 @@ uv run streamlit run app.py
 
 # Deliverable 3 & Explain 1: Methodology & Design
 
-```bash
-head -n 35 src/socmint_narrative_tracker/narratives.py src/socmint_narrative_tracker/coordination.py
-```
-
 - **Unified Schema (`collectors.py`):** Maps Telegram, X, and YouTube into 12 standardized fields. Zero synthetic strings in Python code; unauthenticated snippets without views store `None` for `engagement` instead of fake math. <!--[cite: 1, 3, 4] -->
 - **Unsupervised Clustering (`narratives.py`):** Embeds text with `all-MiniLM-L6-v2` (384-d vectors) + Cosine `AgglomerativeClustering` (`distance_threshold=0.25`) so cluster count $K$ is discovered automatically. Strips target query words from `TfidfVectorizer` stop-words. <!--[cite: 1, 2] -->
 
